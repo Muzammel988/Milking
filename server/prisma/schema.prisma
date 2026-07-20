@@ -1,0 +1,297 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Tenancy / supporting tables
+// ---------------------------------------------------------------------------
+
+model Farm {
+  id           String   @id @default(cuid())
+  name         String
+  ownerName    String
+  address      String?
+  baseCurrency String   @default("USD")
+  createdAt    DateTime @default(now())
+
+  users             User[]
+  locations         Location[]
+  animals           Animal[]
+  systemParameters  SystemParameters?
+
+  @@map("farms")
+}
+
+enum Role {
+  OWNER
+  MANAGER
+  VET
+  HERDSMAN
+  MILKER
+}
+
+model User {
+  id        String   @id @default(cuid())
+  farmId    String
+  farm      Farm     @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  name      String
+  email     String
+  phone     String?
+  role      Role
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  operatedBreedingEvents BreedingEvent[] @relation("BreedingEventOperator")
+  resolvedAlerts         Alert[]         @relation("AlertResolvedBy")
+
+  @@unique([farmId, email])
+  @@map("users")
+}
+
+model Location {
+  id       String  @id @default(cuid())
+  farmId   String
+  farm     Farm    @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  barnName String
+  stallName String?
+  capacity  Int?
+
+  animals Animal[]
+
+  @@map("locations")
+}
+
+// Per-farm configurable thresholds that drive the state machines.
+model SystemParameters {
+  id     String @id @default(cuid())
+  farmId String @unique
+  farm   Farm   @relation(fields: [farmId], references: [id], onDelete: Cascade)
+
+  voluntaryWaitDays      Int @default(50)  // Fresh -> Open window (45-60 typical)
+  openTooLongDays        Int @default(75)  // days since calving before "open too long" alert (60-90 typical)
+  postpartumCheckDay     Int @default(12)  // optional postpartum check, day 10-14
+  heatWindowHours        Int @default(18)  // fertile window length after heat/synchronization (12-18h)
+  pregnancyCheckDays     Int @default(32)  // early check, 30-35 days post-insemination
+  confirmatoryCheckDays  Int @default(60)  // optional second check
+  gestationLengthDays    Int @default(280) // 279-283 typical
+  dryOffOffsetDays       Int @default(60)  // before expected calving
+  closeToCalvingOffsetDays Int @default(21) // before expected calving
+
+  @@map("system_parameters")
+}
+
+// ---------------------------------------------------------------------------
+// Animal - the central entity
+// ---------------------------------------------------------------------------
+
+enum Sex {
+  MALE
+  FEMALE
+}
+
+enum AnimalOrigin {
+  BORN_ON_FARM
+  PURCHASED
+}
+
+enum AnimalStatus {
+  CALF
+  HEIFER
+  COW
+  DRY
+  SOLD
+  DEAD
+  SLAUGHTERED
+}
+
+enum BreedingState {
+  FRESH
+  VOLUNTARY_WAIT
+  OPEN
+  IN_HEAT
+  INSEMINATED
+  PREGNANT
+  CLOSE_TO_CALVING
+  DRY
+  CULLED
+  NOT_APPLICABLE // males / calves not yet in a breeding cycle
+}
+
+enum ExitReason {
+  SALE
+  DEATH
+  SLAUGHTER
+}
+
+model Animal {
+  id             String       @id @default(cuid())
+  farmId         String
+  farm           Farm         @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  earTag         String
+  transponderId  String?
+  name           String?
+  breed          String
+  sex            Sex
+  birthDate      DateTime
+  origin         AnimalOrigin
+  damId          String?
+  dam            Animal?      @relation("DamOffspring", fields: [damId], references: [id])
+  damOffspring   Animal[]     @relation("DamOffspring")
+  sireId         String?
+  sire           Animal?      @relation("SireOffspring", fields: [sireId], references: [id])
+  sireOffspring  Animal[]     @relation("SireOffspring")
+  sireStrawRef   String?      // semen straw reference when sire is not an on-farm animal
+
+  status         AnimalStatus @default(CALF)
+  locationId     String?
+  location       Location?    @relation(fields: [locationId], references: [id])
+
+  entryDate  DateTime @default(now())
+  exitDate   DateTime?
+  exitReason ExitReason?
+
+  // Denormalized latest state-machine values, kept only so list screens can
+  // filter/sort without recomputing history from BreedingEvent every time.
+  breedingState       BreedingState @default(NOT_APPLICABLE)
+  breedingStateSince  DateTime?
+  lactationState      String?       // Fresh | Peak | Mid-Lactation | Late-Lactation | Dry (lactation SM is a later phase)
+  lactationNumber     Int           @default(0)
+  currentLactationStart DateTime?
+
+  // Working fields used by the reproduction state machine, recomputed on
+  // every relevant BreedingEvent so the nightly job can evaluate timers
+  // without re-scanning full history each run.
+  lastCalvingDate        DateTime?
+  lastInseminationDate   DateTime?
+  expectedCalvingDate    DateTime?
+  heatWindowExpiresAt    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  breedingEvents BreedingEvent[] @relation("AnimalBreedingEvents")
+  alerts         Alert[]
+  calvingDetail  CalvingDetail[] @relation("CalfDetail")
+
+  @@unique([farmId, earTag])
+  @@index([farmId, breedingState])
+  @@map("animals")
+}
+
+// ---------------------------------------------------------------------------
+// Breeding / reproduction
+// ---------------------------------------------------------------------------
+
+enum BreedingEventType {
+  HEAT_OBSERVED
+  SYNCHRONIZATION_STEP
+  INSEMINATION
+  PREGNANCY_CHECK
+  CALVING
+  DRY_OFF
+  ABORTION
+}
+
+enum BreedingEventResult {
+  POSITIVE
+  NEGATIVE
+  INCONCLUSIVE
+}
+
+model BreedingEvent {
+  id         String              @id @default(cuid())
+  animalId   String
+  animal     Animal              @relation("AnimalBreedingEvents", fields: [animalId], references: [id], onDelete: Cascade)
+  type       BreedingEventType
+  eventDate  DateTime
+  semenOrSireRef String?
+  operatorId String?
+  operator   User?               @relation("BreedingEventOperator", fields: [operatorId], references: [id])
+  result     BreedingEventResult?
+  notes      String?
+
+  calvingDetail CalvingDetail?
+
+  createdAt DateTime @default(now())
+
+  @@index([animalId, eventDate])
+  @@map("breeding_events")
+}
+
+enum CalvingType {
+  NORMAL
+  ASSISTED
+  CAESAREAN
+}
+
+model CalvingDetail {
+  id              String        @id @default(cuid())
+  breedingEventId String        @unique
+  breedingEvent   BreedingEvent @relation(fields: [breedingEventId], references: [id], onDelete: Cascade)
+  calfAnimalId    String?
+  calfAnimal      Animal?       @relation("CalfDetail", fields: [calfAnimalId], references: [id])
+  calvingType     CalvingType
+  problems        String[]      @default([])
+  birthWeightKg   Float?
+  isTwin          Boolean       @default(false)
+
+  @@map("calving_details")
+}
+
+// ---------------------------------------------------------------------------
+// Alerts / tasks - generated only, never hand-created
+// ---------------------------------------------------------------------------
+
+enum AlertType {
+  POSTPARTUM_CHECK
+  READY_TO_BREED
+  OPEN_TOO_LONG
+  IN_HEAT
+  MISSED_HEAT
+  PREGNANCY_CHECK_DUE
+  PREGNANCY_CHECK_OVERDUE
+  DRY_OFF_DUE
+  CLOSE_TO_CALVING
+}
+
+enum AlertUrgency {
+  URGENT
+  HIGH
+  NORMAL
+  LOW
+}
+
+enum AlertStatus {
+  PENDING
+  DONE
+  DISMISSED
+}
+
+model Alert {
+  id         String       @id @default(cuid())
+  animalId   String?
+  animal     Animal?      @relation(fields: [animalId], references: [id], onDelete: Cascade)
+  type       AlertType
+  urgency    AlertUrgency @default(NORMAL)
+  dueDate    DateTime
+  status     AlertStatus  @default(PENDING)
+  message    String
+
+  resolvedAt DateTime?
+  resolvedById String?
+  resolvedBy   User?     @relation("AlertResolvedBy", fields: [resolvedById], references: [id])
+
+  createdAt DateTime @default(now())
+
+  // Application logic (see alertService) checks for an existing PENDING
+  // alert of the same animal+type before creating a new one, so the nightly
+  // job never spams duplicates. This index makes that lookup cheap.
+  @@index([animalId, type, status])
+  @@index([status, urgency])
+  @@map("alerts")
+}

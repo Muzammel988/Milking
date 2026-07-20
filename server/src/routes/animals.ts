@@ -1,0 +1,119 @@
+import { Router } from "express";
+import { z } from "zod";
+import { prisma } from "../db.js";
+
+export const animalsRouter = Router();
+
+const createAnimalSchema = z.object({
+  farmId: z.string().min(1),
+  earTag: z.string().min(1),
+  transponderId: z.string().optional(),
+  name: z.string().optional(),
+  breed: z.string().min(1),
+  sex: z.enum(["MALE", "FEMALE"]),
+  birthDate: z.coerce.date(),
+  origin: z.enum(["BORN_ON_FARM", "PURCHASED"]),
+  damId: z.string().optional(),
+  sireId: z.string().optional(),
+  sireStrawRef: z.string().optional(),
+  status: z.enum(["CALF", "HEIFER", "COW", "DRY"]).default("CALF"),
+  locationId: z.string().optional(),
+});
+
+animalsRouter.get("/", async (req, res) => {
+  const { farmId, status, breedingState } = req.query as Record<string, string | undefined>;
+  const animals = await prisma.animal.findMany({
+    where: {
+      farmId,
+      status: status as never,
+      breedingState: breedingState as never,
+    },
+    orderBy: { earTag: "asc" },
+  });
+  res.json(animals);
+});
+
+animalsRouter.post("/", async (req, res) => {
+  const parsed = createAnimalSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  // Females are treated as breeding-eligible (Open) from creation — heifers
+  // are bred before their first calving too. The Fresh/Voluntary-Wait part
+  // of the cycle only begins after an actual calving event.
+  const breedingState = parsed.data.sex === "FEMALE" ? "OPEN" : "NOT_APPLICABLE";
+  const animal = await prisma.animal.create({
+    data: { ...parsed.data, breedingState, breedingStateSince: new Date() },
+  });
+  res.status(201).json(animal);
+});
+
+animalsRouter.get("/:id", async (req, res) => {
+  const animal = await prisma.animal.findUnique({
+    where: { id: req.params.id },
+    include: { location: true, dam: true, sire: true },
+  });
+  if (!animal) return res.status(404).json({ error: "Not found" });
+  res.json(animal);
+});
+
+/** Merged, chronological timeline of every event recorded against this animal — the single-source-of-truth view for the Animal Profile screen. */
+animalsRouter.get("/:id/timeline", async (req, res) => {
+  const animal = await prisma.animal.findUnique({ where: { id: req.params.id } });
+  if (!animal) return res.status(404).json({ error: "Not found" });
+
+  const breedingEvents = await prisma.breedingEvent.findMany({
+    where: { animalId: animal.id },
+    include: { operator: true, calvingDetail: true },
+    orderBy: { eventDate: "desc" },
+  });
+
+  const timeline = breedingEvents.map((e) => ({
+    kind: "breeding" as const,
+    date: e.eventDate,
+    id: e.id,
+    type: e.type,
+    result: e.result,
+    notes: e.notes,
+    operator: e.operator?.name ?? null,
+    calvingDetail: e.calvingDetail,
+  }));
+
+  timeline.sort((a, b) => b.date.getTime() - a.date.getTime());
+
+  res.json({ animal, timeline });
+});
+
+const exitSchema = z.object({
+  exitReason: z.enum(["SALE", "DEATH", "SLAUGHTER"]),
+  exitDate: z.coerce.date().default(() => new Date()),
+});
+
+/** Retires an animal from the herd: terminal breeding state, stops all further alert generation. */
+animalsRouter.post("/:id/exit", async (req, res) => {
+  const parsed = exitSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  const animal = await prisma.animal.findUnique({ where: { id: req.params.id } });
+  if (!animal) return res.status(404).json({ error: "Not found" });
+
+  const statusMap = { SALE: "SOLD", DEATH: "DEAD", SLAUGHTER: "SLAUGHTERED" } as const;
+
+  await prisma.$transaction(async (tx) => {
+    await tx.animal.update({
+      where: { id: animal.id },
+      data: {
+        status: statusMap[parsed.data.exitReason],
+        exitDate: parsed.data.exitDate,
+        exitReason: parsed.data.exitReason,
+        breedingState: "CULLED",
+      },
+    });
+    await tx.alert.updateMany({
+      where: { animalId: animal.id, status: "PENDING" },
+      data: { status: "DISMISSED", resolvedAt: new Date() },
+    });
+  });
+
+  const updated = await prisma.animal.findUnique({ where: { id: animal.id } });
+  res.json(updated);
+});
