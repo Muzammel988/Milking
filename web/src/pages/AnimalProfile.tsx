@@ -4,16 +4,9 @@ import { api } from "../api/client";
 import type { Animal, TimelineEntry } from "../api/types";
 import { StateBadge } from "../components/Badges";
 import { QuickAddBreedingEvent } from "../components/QuickAddBreedingEvent";
-
-const EVENT_TYPE_LABELS: Record<string, string> = {
-  HEAT_OBSERVED: "Heat Observed",
-  SYNCHRONIZATION_STEP: "Synchronization Step",
-  INSEMINATION: "Insemination",
-  PREGNANCY_CHECK: "Pregnancy Check",
-  CALVING: "Calving",
-  DRY_OFF: "Dry-off",
-  ABORTION: "Abortion",
-};
+import { QuickAddMilkRecord } from "../components/QuickAddMilkRecord";
+import { QuickAddHealthEvent } from "../components/QuickAddHealthEvent";
+import { TimelineItem } from "../components/TimelineItem";
 
 function age(birthDate: string): string {
   const months = Math.floor((Date.now() - new Date(birthDate).getTime()) / (1000 * 60 * 60 * 24 * 30.44));
@@ -21,13 +14,16 @@ function age(birthDate: string): string {
   return `${Math.floor(months / 12)} yr ${months % 12} mo`;
 }
 
+type QuickAddKind = "breeding" | "milk" | "health" | null;
+
 export function AnimalProfile() {
   const { id } = useParams<{ id: string }>();
   const [animal, setAnimal] = useState<Animal | null>(null);
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
+  const [activeWithdrawalUntil, setActiveWithdrawalUntil] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showQuickAdd, setShowQuickAdd] = useState(false);
+  const [quickAdd, setQuickAdd] = useState<QuickAddKind>(null);
 
   const load = useCallback(() => {
     if (!id) return;
@@ -37,6 +33,7 @@ export function AnimalProfile() {
       .then((data) => {
         setAnimal(data.animal);
         setTimeline(data.timeline);
+        setActiveWithdrawalUntil(data.activeWithdrawalUntil);
       })
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
@@ -47,6 +44,11 @@ export function AnimalProfile() {
   if (loading) return <p>Loading…</p>;
   if (error) return <p className="error-text">{error}</p>;
   if (!animal) return <p>Animal not found.</p>;
+
+  function closeAndReload() {
+    setQuickAdd(null);
+    load();
+  }
 
   return (
     <div>
@@ -64,19 +66,24 @@ export function AnimalProfile() {
             {animal.status} · Lactation #{animal.lactationNumber}
           </p>
         </div>
-        <StateBadge state={animal.breedingState} />
+        <div style={{ display: "flex", gap: 6 }}>
+          <StateBadge state={animal.breedingState} />
+        </div>
       </div>
 
+      {activeWithdrawalUntil && (
+        <div className="card" style={{ borderColor: "var(--urgent)", background: "rgba(192,57,43,0.08)" }}>
+          ⚠️ Milk/meat withdrawal active until <strong>{new Date(activeWithdrawalUntil).toLocaleDateString()}</strong> — do
+          not sell milk or meat from this animal before then.
+        </div>
+      )}
+
       <div className="quick-add-bar">
-        <button className="primary" onClick={() => setShowQuickAdd(true)}>
+        <button className="primary" onClick={() => setQuickAdd("breeding")}>
           + Log Breeding Event
         </button>
-        <button disabled title="Milk recording ships in the next phase">
-          + Record Milk
-        </button>
-        <button disabled title="Health events ship in the next phase">
-          + Log Health Event
-        </button>
+        <button onClick={() => setQuickAdd("milk")}>+ Record Milk</button>
+        <button onClick={() => setQuickAdd("health")}>+ Log Health Event</button>
       </div>
 
       <div className="card">
@@ -86,27 +93,20 @@ export function AnimalProfile() {
         ) : (
           <ul className="timeline">
             {timeline.map((entry) => (
-              <li key={entry.id} className="timeline-item">
-                <div className="date">{new Date(entry.date).toLocaleDateString()}</div>
-                <div className="type">{EVENT_TYPE_LABELS[entry.type] ?? entry.type}</div>
-                {entry.result && <div>Result: {entry.result}</div>}
-                {entry.notes && <div className="meta">{entry.notes}</div>}
-                {entry.operator && <div className="meta">Operator: {entry.operator}</div>}
-              </li>
+              <TimelineItem key={`${entry.kind}-${entry.id}`} entry={entry} />
             ))}
           </ul>
         )}
       </div>
 
-      {showQuickAdd && (
-        <QuickAddBreedingEvent
-          animalId={animal.id}
-          onClose={() => setShowQuickAdd(false)}
-          onSaved={() => {
-            setShowQuickAdd(false);
-            load();
-          }}
-        />
+      {quickAdd === "breeding" && (
+        <QuickAddBreedingEvent animalId={animal.id} onClose={() => setQuickAdd(null)} onSaved={closeAndReload} />
+      )}
+      {quickAdd === "milk" && (
+        <QuickAddMilkRecord farmId={animal.farmId} animalId={animal.id} onClose={() => setQuickAdd(null)} onSaved={closeAndReload} />
+      )}
+      {quickAdd === "health" && (
+        <QuickAddHealthEvent farmId={animal.farmId} animalId={animal.id} onClose={() => setQuickAdd(null)} onSaved={closeAndReload} />
       )}
     </div>
   );

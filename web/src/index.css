@@ -70,6 +70,11 @@ a {
   color: var(--primary-dark);
 }
 
+.user-switcher select {
+  font-size: 0.85rem;
+  padding: 5px 8px;
+}
+
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -338,4 +343,133 @@ tr.clickable:hover {
     --primary: #4fa876;
     --primary-dark: #3d8a5f;
   }
+}
+
+/* Quick Entry — mobile-first, big touch targets, offline status */
+
+.quick-entry {
+  max-width: 480px;
+  margin: 0 auto;
+}
+
+.sync-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.sync-banner.online {
+  background: rgba(47, 111, 78, 0.12);
+  color: var(--primary-dark);
+}
+
+.sync-banner.offline {
+  background: rgba(214, 137, 16, 0.15);
+  color: var(--high);
+}
+
+.flash-banner {
+  background: var(--primary);
+  color: #fff;
+  padding: 8px 12px;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  font-size: 0.9rem;
+  text-align: center;
+}
+
+.qe-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.qe-tabs button {
+  flex: 1;
+  padding: 10px 6px;
+  font-size: 0.95rem;
+}
+
+.qe-tabs button.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.qe-submit {
+  width: 100%;
+  padding: 14px;
+  font-size: 1.05rem;
+  margin-top: 4px;
+}
+
+/* Reports */
+
+.bar-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bar-row {
+  display: grid;
+  grid-template-columns: 120px 1fr 40px;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+}
+
+.bar-track {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  height: 16px;
+  overflow: hidden;
+}
+
+.bar-fill {
+  background: var(--primary);
+  height: 100%;
+}
+
+.bar-value {
+  text-align: right;
+  color: var(--text-muted);
+}
+
+.report-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.report-tabs button.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.filter-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.profit-positive {
+  color: var(--primary);
+  font-weight: 700;
+}
+
+.profit-negative {
+  color: var(--urgent);
+  font-weight: 700;
 }

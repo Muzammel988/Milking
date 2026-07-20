@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../db.js";
+import { requirePermission } from "../middleware/permissions.js";
 
 export const animalsRouter = Router();
 
@@ -33,7 +34,7 @@ animalsRouter.get("/", async (req, res) => {
   res.json(animals);
 });
 
-animalsRouter.post("/", async (req, res) => {
+animalsRouter.post("/", requirePermission("HERD"), async (req, res) => {
   const parsed = createAnimalSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
@@ -61,26 +62,76 @@ animalsRouter.get("/:id/timeline", async (req, res) => {
   const animal = await prisma.animal.findUnique({ where: { id: req.params.id } });
   if (!animal) return res.status(404).json({ error: "Not found" });
 
-  const breedingEvents = await prisma.breedingEvent.findMany({
-    where: { animalId: animal.id },
-    include: { operator: true, calvingDetail: true },
-    orderBy: { eventDate: "desc" },
-  });
+  const [breedingEvents, milkRecords, healthEvents, financialTransactions] = await Promise.all([
+    prisma.breedingEvent.findMany({
+      where: { animalId: animal.id },
+      include: { operator: true, calvingDetail: true },
+    }),
+    prisma.milkRecord.findMany({ where: { animalId: animal.id } }),
+    prisma.healthEvent.findMany({
+      where: { animalId: animal.id },
+      include: { operator: true, medicine: true, vaccine: true },
+    }),
+    prisma.financialTransaction.findMany({ where: { animalId: animal.id } }),
+  ]);
 
-  const timeline = breedingEvents.map((e) => ({
-    kind: "breeding" as const,
-    date: e.eventDate,
-    id: e.id,
-    type: e.type,
-    result: e.result,
-    notes: e.notes,
-    operator: e.operator?.name ?? null,
-    calvingDetail: e.calvingDetail,
-  }));
+  const timeline = [
+    ...breedingEvents.map((e) => ({
+      kind: "breeding" as const,
+      date: e.eventDate,
+      id: e.id,
+      type: e.type,
+      result: e.result,
+      notes: e.notes,
+      operator: e.operator?.name ?? null,
+      calvingDetail: e.calvingDetail,
+    })),
+    ...milkRecords.map((m) => ({
+      kind: "milk" as const,
+      date: m.recordDate,
+      id: m.id,
+      session: m.session,
+      yieldLiters: m.yieldLiters,
+      fatPct: m.fatPct,
+      proteinPct: m.proteinPct,
+    })),
+    ...healthEvents.map((h) => ({
+      kind: "health" as const,
+      date: h.eventDate,
+      id: h.id,
+      type: h.type,
+      medicine: h.medicine?.name ?? null,
+      vaccine: h.vaccine?.name ?? null,
+      dosage: h.dosage,
+      cost: h.cost,
+      notes: h.notes,
+      operator: h.operator?.name ?? null,
+      withdrawalEndDate: h.withdrawalEndDate,
+    })),
+    ...financialTransactions.map((f) => ({
+      kind: "financial" as const,
+      date: f.date,
+      id: f.id,
+      type: f.type,
+      category: f.category,
+      amount: f.amount,
+      currency: f.currency,
+      notes: f.notes,
+    })),
+  ];
 
   timeline.sort((a, b) => b.date.getTime() - a.date.getTime());
 
-  res.json({ animal, timeline });
+  const now = new Date();
+  const activeWithdrawal = healthEvents
+    .filter((h) => h.withdrawalEndDate && h.withdrawalEndDate > now)
+    .sort((a, b) => b.withdrawalEndDate!.getTime() - a.withdrawalEndDate!.getTime())[0];
+
+  res.json({
+    animal,
+    timeline,
+    activeWithdrawalUntil: activeWithdrawal?.withdrawalEndDate ?? null,
+  });
 });
 
 const exitSchema = z.object({
@@ -89,7 +140,7 @@ const exitSchema = z.object({
 });
 
 /** Retires an animal from the herd: terminal breeding state, stops all further alert generation. */
-animalsRouter.post("/:id/exit", async (req, res) => {
+animalsRouter.post("/:id/exit", requirePermission("HERD"), async (req, res) => {
   const parsed = exitSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 

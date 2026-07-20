@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../db.js";
+import { requireAuthenticated } from "../middleware/permissions.js";
 
 export const alertsRouter = Router();
 
@@ -24,7 +25,7 @@ const resolveSchema = z.object({
   resolvedById: z.string().optional(),
 });
 
-alertsRouter.patch("/:id", async (req, res) => {
+alertsRouter.patch("/:id", requireAuthenticated, async (req, res) => {
   const parsed = resolveSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
@@ -33,7 +34,7 @@ alertsRouter.patch("/:id", async (req, res) => {
     data: {
       status: parsed.data.status,
       resolvedAt: new Date(),
-      resolvedById: parsed.data.resolvedById,
+      resolvedById: parsed.data.resolvedById ?? req.currentUser!.id,
     },
   });
   res.json(alert);

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../db.js";
+import { requirePermission } from "../middleware/permissions.js";
 
 export const locationsRouter = Router();
 
@@ -17,7 +18,7 @@ locationsRouter.get("/", async (req, res) => {
   res.json(locations);
 });
 
-locationsRouter.post("/", async (req, res) => {
+locationsRouter.post("/", requirePermission("ADMIN"), async (req, res) => {
   const parsed = createLocationSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const location = await prisma.location.create({ data: parsed.data });

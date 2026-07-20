@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../db.js";
 import { applyBreedingEvent, InvalidTransitionError } from "../services/reproductionStateMachine.js";
+import { requirePermission } from "../middleware/permissions.js";
 
 export const breedingEventsRouter = Router();
 
@@ -26,6 +27,7 @@ const createEventSchema = z.object({
   ]),
   eventDate: z.coerce.date(),
   semenOrSireRef: z.string().optional(),
+  semenStrawId: z.string().optional(),
   operatorId: z.string().optional(),
   result: z.enum(["POSITIVE", "NEGATIVE", "INCONCLUSIVE"]).optional(),
   notes: z.string().optional(),
@@ -42,7 +44,7 @@ breedingEventsRouter.get("/", async (req, res) => {
   res.json(events);
 });
 
-breedingEventsRouter.post("/", async (req, res) => {
+breedingEventsRouter.post("/", requirePermission("BREEDING"), async (req, res) => {
   const parsed = createEventSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const input = parsed.data;
@@ -65,6 +67,7 @@ breedingEventsRouter.post("/", async (req, res) => {
           type: input.type,
           eventDate: input.eventDate,
           semenOrSireRef: input.semenOrSireRef,
+          semenStrawId: input.semenStrawId,
           operatorId: input.operatorId,
           result: input.result,
           notes: input.notes,
@@ -78,6 +81,13 @@ breedingEventsRouter.post("/", async (req, res) => {
         },
         include: { calvingDetail: true },
       });
+
+      if (input.type === "INSEMINATION" && input.semenStrawId) {
+        await tx.semenStraw.update({
+          where: { id: input.semenStrawId },
+          data: { quantityOnHand: { decrement: 1 } },
+        });
+      }
 
       await applyBreedingEvent(tx, animal, params, {
         animalId: input.animalId,

@@ -6,6 +6,7 @@ import type {
   BreedingEventResult,
 } from "@prisma/client";
 import { ensurePendingAlert, resolveAlertsOfType } from "./alertService.js";
+import { startLactationCycle, closeLactationCycle } from "./lactationService.js";
 
 type Tx = Prisma.TransactionClient;
 
@@ -207,9 +208,10 @@ async function onCalving(tx: Tx, animal: Animal, params: SystemParameters, input
       heatWindowExpiresAt: null,
       lactationNumber: { increment: 1 },
       currentLactationStart: input.eventDate,
-      lactationState: "Fresh",
+      lactationState: "FRESH",
     },
   });
+  await startLactationCycle(tx, animal, params, input.eventDate);
 
   await resolveAlertsOfType(
     tx,
@@ -234,8 +236,9 @@ async function onDryOff(tx: Tx, animal: Animal, input: BreedingEventInput) {
 
   await tx.animal.update({
     where: { id: animal.id },
-    data: { breedingState: "DRY", breedingStateSince: input.eventDate, status: "DRY", lactationState: "Dry" },
+    data: { breedingState: "DRY", breedingStateSince: input.eventDate, status: "DRY", lactationState: "DRY" },
   });
+  await closeLactationCycle(tx, animal, input.eventDate);
   await resolveAlertsOfType(tx, animal.id, ["DRY_OFF_DUE"], "DONE");
 }
 

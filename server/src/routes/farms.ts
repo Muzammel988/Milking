@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../db.js";
+import { requirePermission } from "../middleware/permissions.js";
 
 export const farmsRouter = Router();
 
@@ -46,9 +47,16 @@ const updateParamsSchema = z.object({
   gestationLengthDays: z.number().int().positive().optional(),
   dryOffOffsetDays: z.number().int().positive().optional(),
   closeToCalvingOffsetDays: z.number().int().positive().optional(),
+  colostrumDays: z.number().int().positive().optional(),
+  freshLactationDays: z.number().int().positive().optional(),
+  peakLactationDays: z.number().int().positive().optional(),
+  midLactationDays: z.number().int().positive().optional(),
+  targetDryOffDim: z.number().int().positive().optional(),
+  yieldDropThresholdPct: z.number().int().positive().optional(),
+  missingMilkDataDays: z.number().int().positive().optional(),
 });
 
-farmsRouter.put("/:id/system-parameters", async (req, res) => {
+farmsRouter.put("/:id/system-parameters", requirePermission("ADMIN"), async (req, res) => {
   const parsed = updateParamsSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 

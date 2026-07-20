@@ -12,7 +12,8 @@
     "prisma:deploy": "prisma migrate deploy",
     "seed": "tsx prisma/seed.ts",
     "test": "vitest run",
-    "job:reproduction": "tsx src/jobs/runReproductionJob.ts"
+    "job:reproduction": "tsx src/jobs/runReproductionJob.ts",
+    "job:lactation": "tsx src/jobs/runLactationJob.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.20.0",

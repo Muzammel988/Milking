@@ -19,10 +19,18 @@ model Farm {
   baseCurrency String   @default("USD")
   createdAt    DateTime @default(now())
 
-  users             User[]
-  locations         Location[]
-  animals           Animal[]
-  systemParameters  SystemParameters?
+  users                  User[]
+  locations              Location[]
+  animals                Animal[]
+  systemParameters       SystemParameters?
+  milkRecords            MilkRecord[]
+  medicines              Medicine[]
+  vaccines               Vaccine[]
+  feedIngredients        FeedIngredient[]
+  rationFormulas         RationFormula[]
+  feedConsumptionRecords FeedConsumptionRecord[]
+  financialTransactions  FinancialTransaction[]
+  semenStraws            SemenStraw[]
 
   @@map("farms")
 }
@@ -47,6 +55,7 @@ model User {
   createdAt DateTime @default(now())
 
   operatedBreedingEvents BreedingEvent[] @relation("BreedingEventOperator")
+  operatedHealthEvents   HealthEvent[]   @relation("HealthEventOperator")
   resolvedAlerts         Alert[]         @relation("AlertResolvedBy")
 
   @@unique([farmId, email])
@@ -54,10 +63,10 @@ model User {
 }
 
 model Location {
-  id       String  @id @default(cuid())
-  farmId   String
-  farm     Farm    @relation(fields: [farmId], references: [id], onDelete: Cascade)
-  barnName String
+  id        String  @id @default(cuid())
+  farmId    String
+  farm      Farm    @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  barnName  String
   stallName String?
   capacity  Int?
 
@@ -72,15 +81,24 @@ model SystemParameters {
   farmId String @unique
   farm   Farm   @relation(fields: [farmId], references: [id], onDelete: Cascade)
 
-  voluntaryWaitDays      Int @default(50)  // Fresh -> Open window (45-60 typical)
-  openTooLongDays        Int @default(75)  // days since calving before "open too long" alert (60-90 typical)
-  postpartumCheckDay     Int @default(12)  // optional postpartum check, day 10-14
-  heatWindowHours        Int @default(18)  // fertile window length after heat/synchronization (12-18h)
-  pregnancyCheckDays     Int @default(32)  // early check, 30-35 days post-insemination
-  confirmatoryCheckDays  Int @default(60)  // optional second check
-  gestationLengthDays    Int @default(280) // 279-283 typical
-  dryOffOffsetDays       Int @default(60)  // before expected calving
+  voluntaryWaitDays        Int @default(50) // Fresh -> Open window (45-60 typical)
+  openTooLongDays          Int @default(75) // days since calving before "open too long" alert (60-90 typical)
+  postpartumCheckDay       Int @default(12) // optional postpartum check, day 10-14
+  heatWindowHours          Int @default(18) // fertile window length after heat/synchronization (12-18h)
+  pregnancyCheckDays       Int @default(32) // early check, 30-35 days post-insemination
+  confirmatoryCheckDays    Int @default(60) // optional second check
+  gestationLengthDays      Int @default(280) // 279-283 typical
+  dryOffOffsetDays         Int @default(60) // before expected calving
   closeToCalvingOffsetDays Int @default(21) // before expected calving
+
+  // Lactation state machine thresholds (days in milk, DIM)
+  colostrumDays         Int @default(4) // 3-5 typical, excluded from tank/sale calcs
+  freshLactationDays    Int @default(21) // Fresh -> Peak
+  peakLactationDays     Int @default(100) // Peak -> Mid-Lactation
+  midLactationDays      Int @default(200) // Mid -> Late-Lactation
+  targetDryOffDim       Int @default(305) // recommended dry-off day-in-milk
+  yieldDropThresholdPct Int @default(18) // single-day drop vs rolling 3-day avg that flags a health-check suggestion
+  missingMilkDataDays   Int @default(2) // days with no milk record before flagging
 
   @@map("system_parameters")
 }
@@ -129,54 +147,59 @@ enum ExitReason {
 }
 
 model Animal {
-  id             String       @id @default(cuid())
-  farmId         String
-  farm           Farm         @relation(fields: [farmId], references: [id], onDelete: Cascade)
-  earTag         String
-  transponderId  String?
-  name           String?
-  breed          String
-  sex            Sex
-  birthDate      DateTime
-  origin         AnimalOrigin
-  damId          String?
-  dam            Animal?      @relation("DamOffspring", fields: [damId], references: [id])
-  damOffspring   Animal[]     @relation("DamOffspring")
-  sireId         String?
-  sire           Animal?      @relation("SireOffspring", fields: [sireId], references: [id])
-  sireOffspring  Animal[]     @relation("SireOffspring")
-  sireStrawRef   String?      // semen straw reference when sire is not an on-farm animal
+  id            String       @id @default(cuid())
+  farmId        String
+  farm          Farm         @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  earTag        String
+  transponderId String?
+  name          String?
+  breed         String
+  sex           Sex
+  birthDate     DateTime
+  origin        AnimalOrigin
+  damId         String?
+  dam           Animal?      @relation("DamOffspring", fields: [damId], references: [id])
+  damOffspring  Animal[]     @relation("DamOffspring")
+  sireId        String?
+  sire          Animal?      @relation("SireOffspring", fields: [sireId], references: [id])
+  sireOffspring Animal[]     @relation("SireOffspring")
+  sireStrawRef  String? // semen straw reference when sire is not an on-farm animal
 
-  status         AnimalStatus @default(CALF)
-  locationId     String?
-  location       Location?    @relation(fields: [locationId], references: [id])
+  status     AnimalStatus @default(CALF)
+  locationId String?
+  location   Location?    @relation(fields: [locationId], references: [id])
 
-  entryDate  DateTime @default(now())
+  entryDate  DateTime    @default(now())
   exitDate   DateTime?
   exitReason ExitReason?
 
   // Denormalized latest state-machine values, kept only so list screens can
   // filter/sort without recomputing history from BreedingEvent every time.
-  breedingState       BreedingState @default(NOT_APPLICABLE)
-  breedingStateSince  DateTime?
-  lactationState      String?       // Fresh | Peak | Mid-Lactation | Late-Lactation | Dry (lactation SM is a later phase)
-  lactationNumber     Int           @default(0)
+  breedingState         BreedingState        @default(NOT_APPLICABLE)
+  breedingStateSince    DateTime?
+  lactationState        LactationCycleState?
+  lactationNumber       Int                  @default(0)
   currentLactationStart DateTime?
 
   // Working fields used by the reproduction state machine, recomputed on
   // every relevant BreedingEvent so the nightly job can evaluate timers
   // without re-scanning full history each run.
-  lastCalvingDate        DateTime?
-  lastInseminationDate   DateTime?
-  expectedCalvingDate    DateTime?
-  heatWindowExpiresAt    DateTime?
+  lastCalvingDate      DateTime?
+  lastInseminationDate DateTime?
+  expectedCalvingDate  DateTime?
+  heatWindowExpiresAt  DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  breedingEvents BreedingEvent[] @relation("AnimalBreedingEvents")
-  alerts         Alert[]
-  calvingDetail  CalvingDetail[] @relation("CalfDetail")
+  breedingEvents         BreedingEvent[]         @relation("AnimalBreedingEvents")
+  alerts                 Alert[]
+  calvingDetail          CalvingDetail[]         @relation("CalfDetail")
+  milkRecords            MilkRecord[]
+  lactationCycles        LactationCycle[]
+  healthEvents           HealthEvent[]
+  financialTransactions  FinancialTransaction[]
+  feedConsumptionRecords FeedConsumptionRecord[]
 
   @@unique([farmId, earTag])
   @@index([farmId, breedingState])
@@ -204,16 +227,18 @@ enum BreedingEventResult {
 }
 
 model BreedingEvent {
-  id         String              @id @default(cuid())
-  animalId   String
-  animal     Animal              @relation("AnimalBreedingEvents", fields: [animalId], references: [id], onDelete: Cascade)
-  type       BreedingEventType
-  eventDate  DateTime
+  id             String               @id @default(cuid())
+  animalId       String
+  animal         Animal               @relation("AnimalBreedingEvents", fields: [animalId], references: [id], onDelete: Cascade)
+  type           BreedingEventType
+  eventDate      DateTime
   semenOrSireRef String?
-  operatorId String?
-  operator   User?               @relation("BreedingEventOperator", fields: [operatorId], references: [id])
-  result     BreedingEventResult?
-  notes      String?
+  semenStrawId   String?
+  semenStraw     SemenStraw?          @relation(fields: [semenStrawId], references: [id])
+  operatorId     String?
+  operator       User?                @relation("BreedingEventOperator", fields: [operatorId], references: [id])
+  result         BreedingEventResult?
+  notes          String?
 
   calvingDetail CalvingDetail?
 
@@ -257,6 +282,9 @@ enum AlertType {
   PREGNANCY_CHECK_OVERDUE
   DRY_OFF_DUE
   CLOSE_TO_CALVING
+  YIELD_DROP
+  MISSING_MILK_DATA
+  LOW_FEED_STOCK
 }
 
 enum AlertUrgency {
@@ -273,16 +301,16 @@ enum AlertStatus {
 }
 
 model Alert {
-  id         String       @id @default(cuid())
-  animalId   String?
-  animal     Animal?      @relation(fields: [animalId], references: [id], onDelete: Cascade)
-  type       AlertType
-  urgency    AlertUrgency @default(NORMAL)
-  dueDate    DateTime
-  status     AlertStatus  @default(PENDING)
-  message    String
+  id       String       @id @default(cuid())
+  animalId String?
+  animal   Animal?      @relation(fields: [animalId], references: [id], onDelete: Cascade)
+  type     AlertType
+  urgency  AlertUrgency @default(NORMAL)
+  dueDate  DateTime
+  status   AlertStatus  @default(PENDING)
+  message  String
 
-  resolvedAt DateTime?
+  resolvedAt   DateTime?
   resolvedById String?
   resolvedBy   User?     @relation("AlertResolvedBy", fields: [resolvedById], references: [id])
 
@@ -294,4 +322,259 @@ model Alert {
   @@index([animalId, type, status])
   @@index([status, urgency])
   @@map("alerts")
+}
+
+// ---------------------------------------------------------------------------
+// Milk / lactation
+// ---------------------------------------------------------------------------
+
+enum MilkSession {
+  MORNING
+  MIDDAY
+  EVENING
+}
+
+model MilkRecord {
+  id               String      @id @default(cuid())
+  farmId           String
+  farm             Farm        @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  animalId         String? // null = bulk-tank entry, not tied to one animal
+  animal           Animal?     @relation(fields: [animalId], references: [id], onDelete: Cascade)
+  recordDate       DateTime
+  session          MilkSession
+  yieldLiters      Float
+  fatPct           Float?
+  proteinPct       Float?
+  somaticCellCount Int?
+  createdAt        DateTime    @default(now())
+
+  @@index([animalId, recordDate])
+  @@index([farmId, recordDate])
+  @@map("milk_records")
+}
+
+enum LactationCycleState {
+  FRESH
+  PEAK
+  MID_LACTATION
+  LATE_LACTATION
+  DRY
+}
+
+// One row per lactation (started by a calving, closed by a dry-off) rather
+// than a single mutable field on Animal, since spec calls for cycle totals
+// (peak yield, total yield, avg DIM) captured at close.
+model LactationCycle {
+  id               String              @id @default(cuid())
+  animalId         String
+  animal           Animal              @relation(fields: [animalId], references: [id], onDelete: Cascade)
+  cycleNumber      Int
+  startDate        DateTime
+  endDate          DateTime?
+  colostrumEndDate DateTime
+  state            LactationCycleState @default(FRESH)
+
+  peakYield     Float?
+  totalYield    Float?
+  avgDailyYield Float?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([animalId, state])
+  @@map("lactation_cycles")
+}
+
+// ---------------------------------------------------------------------------
+// Health
+// ---------------------------------------------------------------------------
+
+enum HealthEventType {
+  EXAMINATION
+  DIAGNOSIS
+  TREATMENT
+  VACCINATION
+}
+
+model Medicine {
+  id                          String @id @default(cuid())
+  farmId                      String
+  farm                        Farm   @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  name                        String
+  type                        String
+  defaultWithdrawalPeriodDays Int    @default(0)
+  unitCost                    Float  @default(0)
+
+  healthEvents HealthEvent[]
+
+  @@map("medicines")
+}
+
+model Vaccine {
+  id                          String @id @default(cuid())
+  farmId                      String
+  farm                        Farm   @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  name                        String
+  type                        String
+  defaultWithdrawalPeriodDays Int    @default(0)
+  unitCost                    Float  @default(0)
+
+  healthEvents HealthEvent[]
+
+  @@map("vaccines")
+}
+
+model HealthEvent {
+  id         String          @id @default(cuid())
+  animalId   String
+  animal     Animal          @relation(fields: [animalId], references: [id], onDelete: Cascade)
+  type       HealthEventType
+  eventDate  DateTime
+  medicineId String?
+  medicine   Medicine?       @relation(fields: [medicineId], references: [id])
+  vaccineId  String?
+  vaccine    Vaccine?        @relation(fields: [vaccineId], references: [id])
+  dosage     String?
+  cost       Float?
+  operatorId String?
+  operator   User?           @relation("HealthEventOperator", fields: [operatorId], references: [id])
+  notes      String?
+
+  // Milk/meat withdrawal — computed at creation from the medicine/vaccine's
+  // default (or an explicit override), since this is a food-safety
+  // requirement rather than just informational.
+  withdrawalPeriodDays Int?
+  withdrawalEndDate    DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([animalId, eventDate])
+  @@map("health_events")
+}
+
+// ---------------------------------------------------------------------------
+// Feed
+// ---------------------------------------------------------------------------
+
+model FeedIngredient {
+  id            String @id @default(cuid())
+  farmId        String
+  farm          Farm   @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  name          String
+  unitOfMeasure String
+  costPerUnit   Float
+  stockQuantity Float  @default(0)
+
+  rationIngredients RationFormulaIngredient[]
+
+  @@map("feed_ingredients")
+}
+
+enum RationTargetGroup {
+  LACTATING
+  DRY
+  HEIFER
+  CALF
+}
+
+model RationFormula {
+  id          String            @id @default(cuid())
+  farmId      String
+  farm        Farm              @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  name        String
+  targetGroup RationTargetGroup
+  createdAt   DateTime          @default(now())
+
+  ingredients        RationFormulaIngredient[]
+  consumptionRecords FeedConsumptionRecord[]
+
+  @@map("ration_formulas")
+}
+
+model RationFormulaIngredient {
+  id                    String         @id @default(cuid())
+  rationFormulaId       String
+  rationFormula         RationFormula  @relation(fields: [rationFormulaId], references: [id], onDelete: Cascade)
+  feedIngredientId      String
+  feedIngredient        FeedIngredient @relation(fields: [feedIngredientId], references: [id])
+  quantityPerHeadPerDay Float // in the ingredient's unit of measure
+
+  @@map("ration_formula_ingredients")
+}
+
+model FeedConsumptionRecord {
+  id              String        @id @default(cuid())
+  farmId          String
+  farm            Farm          @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  rationFormulaId String
+  rationFormula   RationFormula @relation(fields: [rationFormulaId], references: [id])
+  animalId        String? // set for an individual, omitted for a group entry
+  animal          Animal?       @relation(fields: [animalId], references: [id])
+  groupLabel      String? // e.g. "lactating cows" when not tied to one animal
+  headCount       Int           @default(1)
+  date            DateTime
+  totalCost       Float // headCount * ration cost-per-head-per-day, snapshotted at entry time
+  createdAt       DateTime      @default(now())
+
+  @@index([farmId, date])
+  @@map("feed_consumption_records")
+}
+
+// ---------------------------------------------------------------------------
+// Financials
+// ---------------------------------------------------------------------------
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+}
+
+enum TransactionCategory {
+  MILK_SALE
+  FEED_PURCHASE
+  VET_COST
+  INSEMINATION_COST
+  ANIMAL_PURCHASE
+  ANIMAL_SALE
+  LABOR
+  OTHER
+}
+
+model FinancialTransaction {
+  id               String              @id @default(cuid())
+  farmId           String
+  farm             Farm                @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  date             DateTime
+  type             TransactionType
+  category         TransactionCategory
+  amount           Float
+  currency         String              @default("USD")
+  animalId         String?
+  animal           Animal?             @relation(fields: [animalId], references: [id])
+  animalGroupLabel String?
+  notes            String?
+  createdAt        DateTime            @default(now())
+
+  @@index([farmId, date])
+  @@index([animalId])
+  @@map("financial_transactions")
+}
+
+// ---------------------------------------------------------------------------
+// Semen inventory
+// ---------------------------------------------------------------------------
+
+model SemenStraw {
+  id              String @id @default(cuid())
+  farmId          String
+  farm            Farm   @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  sireName        String
+  breed           String
+  strawIdentifier String @unique
+  quantityOnHand  Int    @default(0)
+  costPerStraw    Float  @default(0)
+
+  breedingEvents BreedingEvent[]
+
+  @@map("semen_straws")
 }

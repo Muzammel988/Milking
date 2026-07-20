@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../db.js";
+import { requirePermission } from "../middleware/permissions.js";
 
 export const usersRouter = Router();
 
@@ -18,7 +19,7 @@ usersRouter.get("/", async (req, res) => {
   res.json(users);
 });
 
-usersRouter.post("/", async (req, res) => {
+usersRouter.post("/", requirePermission("ADMIN"), async (req, res) => {
   const parsed = createUserSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const user = await prisma.user.create({ data: parsed.data });
